@@ -1,0 +1,2 @@
+# hack.py
+fake malwatr
