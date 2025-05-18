@@ -1,174 +1,310 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+import time
+import math
+import random
+import threading
+import pygame
+from pynput import mouse, keyboard
+from tkinter import Tk, Label, messagebox, Frame, Button, Scale, HORIZONTAL, StringVar
+from PIL import Image, ImageTk
 
-# C extensions
-*.so
+# Inicializace pygame pro zvuk
+pygame.mixer.init()
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# Zvuky
+sounds = {
+    "weak": pygame.mixer.Sound("tick.wav"),           # menší třesení
+    "medium": pygame.mixer.Sound("boom_explosion.wav"), # standardní explozivní zvuk
+    "strong": pygame.mixer.Sound("big_boom.wav"),       # silnější explozivní zvuk
+}
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+# Obrázky pro explozi - dej do složky nebo cesty uprav podle potřeby
+explosion_images = ["explosion.png", "boom.png", "kaboom.png"]
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# Meme texty
+meme_texts = [
+    "BOOM!",
+    "KABOOM!",
+    "EXPLOSION!",
+    "WHAT A SHAKE!",
+    "SHAKE IT OFF!",
+    "YOU ROCK!",
+]
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
+# Log soubor
+log_file = "explosion_log.txt"
 
-# Translations
-*.mo
-*.pot
+# Globální proměnné a nastavení
+last_pos = None
+shake_events = []
+can_trigger = False
+last_shake_time = 0
+last_explosion_time = 0
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+# Výchozí nastavení, lze měnit v GUI
+settings = {
+    "shake_threshold": 600,         # vzdálenost pohybu
+    "multi_shake_window": 1.0,      # časové okno pro rychlé třesení
+    "required_shakes": 5,           # počet třesení k aktivaci
+    "cooldown": 1.5,                # cooldown po explozi
+    "blink_speed": 100,             # ms rychlost blikání
+    "active_area": (0, 0, 1920, 1080),  # oblast, kde se detekuje (x1,y1,x2,y2)
+    "idle_timeout": 10,             # čas nečinnosti v sekundách před spánkem
+}
 
-# Flask stuff:
-instance/
-.webassets-cache
+# Pomocné funkce
+def distance(p1, p2):
+    return math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
 
-# Scrapy stuff:
-.scrapy
+def in_active_area(x, y):
+    x1, y1, x2, y2 = settings["active_area"]
+    return x1 <= x <= x2 and y1 <= y <= y2
 
-# Sphinx documentation
-docs/_build/
+def log_explosion(intensity):
+    with open(log_file, "a") as f:
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - Explosion intensity: {intensity}\n")
 
-# PyBuilder
-.pybuilder/
-target/
+def show_warning():
+    root = Tk()
+    root.withdraw()
+    messagebox.showwarning(
+        "Epileptické varování",
+        "Tento program obsahuje blikající efekty, které mohou vyvolat epileptický záchvat.\nPokračujte na vlastní nebezpečí."
+    )
+    root.destroy()
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Zvukový efekt podle intenzity
+def play_sound(intensity):
+    if intensity == "weak":
+        sounds["weak"].play()
+    elif intensity == "medium":
+        sounds["medium"].play()
+    else:
+        sounds["strong"].play()
 
-# IPython
-profile_default/
-ipython_config.py
+# Vibrace okna
+def shake_window(root, intensity=10, times=10, delay=20):
+    def _shake(i=0):
+        if i >= times:
+            root.geometry(orig_geom)
+            return
+        offset_x = (i % 2 * 2 - 1) * intensity
+        offset_y = (i % 2 * 2 - 1) * intensity
+        root.geometry(f"+{orig_x + offset_x}+{orig_y + offset_y}")
+        root.after(delay, _shake, i+1)
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
+    orig_geom = root.geometry()
+    orig_x = root.winfo_x()
+    orig_y = root.winfo_y()
+    _shake()
 
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
+# Zobrazení exploze s blikáním a meme textem
+def show_explosion(intensity="medium"):
+    root = Tk()
+    root.title("Explosion!")
+    root.geometry("+500+300")
+    root.attributes('-topmost', True)
 
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
+    frame = Frame(root, bd=10, relief="solid")
+    frame.pack()
 
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
+    # Náhodný obrázek
+    img_path = random.choice(explosion_images)
+    img = Image.open(img_path)
+    photo = ImageTk.PhotoImage(img)
+    label = Label(frame, image=photo)
+    label.pack()
 
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
-.pdm.toml
-.pdm-python
-.pdm-build/
+    # Meme text
+    meme = random.choice(meme_texts)
+    text_label = Label(root, text=meme, font=("Arial", 24, "bold"))
+    text_label.pack()
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
+    # Duhové barvy pro blikání rámečku
+    colors = ["red", "orange", "yellow", "green", "blue", "indigo", "violet"]
+    def blink(i=0):
+        frame.config(bg=colors[i % len(colors)])
+        root.after(settings["blink_speed"], blink, i+1)
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
+    blink()
 
-# SageMath parsed files
-*.sage.py
+    # Vibrace okna při silné explozi
+    if intensity == "strong":
+        shake_window(root, intensity=15, times=15, delay=15)
+    elif intensity == "medium":
+        shake_window(root, intensity=7, times=10, delay=20)
+    # weak - bez vibrace
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+    root.after(2000, root.destroy)
+    root.mainloop()
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# Exploze vyvolaná třesením
+def explosion_trigger(intensity="medium"):
+    global can_trigger, last_explosion_time
+    if not can_trigger:
+        return
+    can_trigger = False
 
-# Rope project settings
-.ropeproject
+    # Zvuk
+    threading.Thread(target=play_sound, args=(intensity,)).start()
+    # Okno
+    show_explosion(intensity)
 
-# mkdocs documentation
-/site
+    # Logování
+    log_explosion(intensity)
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+    last_explosion_time = time.time()
+    time.sleep(settings["cooldown"])
+    can_trigger = True
 
-# Pyre type checker
-.pyre/
+# Poslech pohybu myši a detekce třesení
+def on_move(x, y):
+    global last_pos, shake_events, can_trigger, last_shake_time
 
-# pytype static type analyzer
-.pytype/
+    if not can_trigger:
+        return
 
-# Cython debug symbols
-cython_debug/
+    if not in_active_area(x, y):
+        return
 
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+    current_time = time.time()
 
-# Ruff stuff:
-.ruff_cache/
+    if last_pos is not None:
+        dist = distance((x,y), last_pos)
+        if dist > settings["shake_threshold"]:
+            shake_events.append(current_time)
+            # Odeber staré události
+            shake_events[:] = [t for t in shake_events if current_time - t <= settings["multi_shake_window"]]
+            if len(shake_events) >= settings["required_shakes"]:
+                # Intenzita podle rychlosti
+                intensity = "medium"
+                if dist > settings["shake_threshold"] * 2:
+                    intensity = "strong"
+                elif dist < settings["shake_threshold"] * 1.2:
+                    intensity = "weak"
+                threading.Thread(target=explosion_trigger, args=(intensity,)).start()
+                shake_events.clear()
+            last_shake_time = current_time
 
-# PyPI configuration file
-.pypirc
+    last_pos = (x, y)
+
+# Automatický režim spánku po nečinnosti
+def idle_check():
+    global can_trigger, last_shake_time
+    while True:
+        if time.time() - last_shake_time > settings["idle_timeout"]:
+            if can_trigger:
+                print("[INFO] Detekce nečinná, uspáváme...")
+                can_trigger = False
+        else:
+            if not can_trigger:
+                print("[INFO] Aktivujeme detekci...")
+                can_trigger = True
+        time.sleep(1)
+
+# Manuální spuštění efektem mezerníku
+def on_press(key):
+    try:
+        if key.char == " ":
+            print("[INFO] Manuální spuštění exploze")
+            threading.Thread(target=explosion_trigger, args=("medium",)).start()
+    except AttributeError:
+        pass
+
+# GUI pro nastavení parametrů
+def open_settings():
+    def apply_settings():
+        try:
+            settings["shake_threshold"] = int(thresh_scale.get())
+            settings["multi_shake_window"] = float(window_scale.get())
+            settings["required_shakes"] = int(shakes_scale.get())
+            settings["cooldown"] = float(cooldown_scale.get())
+            settings["blink_speed"] = int(blink_scale.get())
+            x1 = int(area_x1.get())
+            y1 = int(area_y1.get())
+            x2 = int(area_x2.get())
+            y2 = int(area_y2.get())
+            settings["active_area"] = (x1,y1,x2,y2)
+            settings["idle_timeout"] = int(idle_scale.get())
+            settings_window.destroy()
+            print("[INFO] Nastavení aplikováno.")
+        except Exception as e:
+            print(f"[ERROR] Chyba při aplikaci nastavení: {e}")
+
+    settings_window = Tk()
+    settings_window.title("Nastavení efektu třesení myši")
+
+    Label(settings_window, text="Práh třesení (distance):").pack()
+    thresh_scale = Scale(settings_window, from_=100, to=2000, orient=HORIZONTAL)
+    thresh_scale.set(settings["shake_threshold"])
+    thresh_scale.pack()
+
+    Label(settings_window, text="Časové okno třesení (sekundy):").pack()
+    window_scale = Scale(settings_window, from_=0.1, to=5.0, resolution=0.1, orient=HORIZONTAL)
+    window_scale.set(settings["multi_shake_window"])
+    window_scale.pack()
+
+    Label(settings_window, text="Počet třesení k aktivaci:").pack()
+    shakes_scale = Scale(settings_window, from_=1, to=10, orient=HORIZONTAL)
+    shakes_scale.set(settings["required_shakes"])
+    shakes_scale.pack()
+
+    Label(settings_window, text="Cooldown po explozi (sekundy):").pack()
+    cooldown_scale = Scale(settings_window, from_=0.5, to=5.0, resolution=0.1, orient=HORIZONTAL)
+    cooldown_scale.set(settings["cooldown"])
+    cooldown_scale.pack()
+
+    Label(settings_window, text="Rychlost blikání (ms):").pack()
+    blink_scale = Scale(settings_window, from_=50, to=1000, orient=HORIZONTAL)
+    blink_scale.set(settings["blink_speed"])
+    blink_scale.pack()
+
+    Label(settings_window, text="Aktivní oblast (x1,y1,x2,y2):").pack()
+    area_x1 = Scale(settings_window, from_=0, to=1920, orient=HORIZONTAL)
+    area_x1.set(settings["active_area"][0])
+    area_x1.pack()
+    area_y1 = Scale(settings_window, from_=0, to=1080, orient=HORIZONTAL)
+    area_y1.set(settings["active_area"][1])
+    area_y1.pack()
+    area_x2 = Scale(settings_window, from_=0, to=1920, orient=HORIZONTAL)
+    area_x2.set(settings["active_area"][2])
+    area_x2.pack()
+    area_y2 = Scale(settings_window, from_=0, to=1080, orient=HORIZONTAL)
+    area_y2.set(settings["active_area"][3])
+    area_y2.pack()
+
+    Label(settings_window, text="Timeout nečinnosti (sekundy):").pack()
+    idle_scale = Scale(settings_window, from_=1, to=60, orient=HORIZONTAL)
+    idle_scale.set(settings["idle_timeout"])
+    idle_scale.pack()
+
+    Button(settings_window, text="Použít", command=apply_settings).pack()
+
+    settings_window.mainloop()
+
+# Hlavní funkce
+def main():
+    show_warning()
+    global can_trigger, last_shake_time
+    can_trigger = True
+    last_shake_time = time.time()
+    print("Skript běží, třes myší rychle a intenzivně pro explozi!")
+
+    # Spustíme pozadí kontrolu nečinnosti
+    threading.Thread(target=idle_check, daemon=True).start()
+
+    # Listener pro myš
+    mouse_listener = mouse.Listener(on_move=on_move)
+    mouse_listener.start()
+
+    # Listener pro klávesnici
+    keyboard_listener = keyboard.Listener(on_press=on_press)
+    keyboard_listener.start()
+
+    # GUI pro nastavení v hlavním vlákně
+    open_settings()
+
+    mouse_listener.join()
+    keyboard_listener.join()
+
+if __name__ == "__main__":
+    main()
